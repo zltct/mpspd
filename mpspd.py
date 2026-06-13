@@ -430,6 +430,7 @@ async def run_scan(args: argparse.Namespace) -> int:
         import_local_images(output_dir, base_url=state.base_url)
 
     records = load_found_records(found_path)
+    state.found = len(records)
     seen = {found_key(record) for record in records}
     start_time = time.monotonic()
     total_candidates = 0
@@ -546,6 +547,7 @@ async def run_scan(args: argparse.Namespace) -> int:
             if delay_seconds:
                 await asyncio.sleep(delay_seconds)
 
+    state.found = len(records)
     save_state(state_path, state)
     render_index(index_path, state, records, stop_enabled=stop_path.exists())
     print(

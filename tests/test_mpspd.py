@@ -149,6 +149,7 @@ class MpspdCoreTests(unittest.TestCase):
                 state = mpspd.load_state(Path(temp_dir) / mpspd.STATE_FILE)
                 self.assertEqual(len(records), 1)
                 self.assertEqual(records[0].photo_id, 23670390)
+                self.assertEqual(state.found, 1)
                 self.assertEqual(state.next_photo_id, 23670389)
                 self.assertEqual(state.next_photo_number, 98)
                 self.assertTrue((Path(temp_dir) / mpspd.INDEX_FILE).exists())
