@@ -1,0 +1,147 @@
+name: MPSPD Scan
+
+on:
+  workflow_dispatch:
+    inputs:
+      seed_url:
+        description: "Initial image URL. Used only when state.json does not exist or reset_state is true."
+        required: false
+        default: ""
+      increment:
+        description: "1 to scan forward, -1 to scan backward."
+        required: false
+        default: "-1"
+      concurrency:
+        description: "Concurrent HTTP probes."
+        required: false
+        default: "50"
+      max_runtime_seconds:
+        description: "Keep below the 6 hour GitHub-hosted runner job limit."
+        required: false
+        default: "21000"
+      reset_state:
+        description: "Reset state from seed_url before scanning."
+        required: false
+        default: "false"
+      continue_loop:
+        description: "Dispatch another scan when this run finishes."
+        required: false
+        default: "true"
+  repository_dispatch:
+    types: [mpspd-start]
+
+permissions:
+  actions: write
+  contents: write
+
+concurrency:
+  group: mpspd-scan
+  cancel-in-progress: false
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 355
+    env:
+      DEFAULT_SEED_URL: ${{ vars.MPSPD_SEED_URL }}
+      GH_TOKEN: ${{ github.token }}
+      SCAN_WORKFLOW: mpspd-scan.yml
+    steps:
+      - name: Checkout scanner
+        uses: actions/checkout@v4
+        with:
+          path: scanner
+
+      - name: Checkout existing Pages state
+        uses: actions/checkout@v4
+        continue-on-error: true
+        with:
+          ref: gh-pages
+          path: public
+
+      - name: Prepare empty Pages state
+        run: |
+          mkdir -p public
+          touch public/.nojekyll
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+          cache-dependency-path: scanner/requirements.txt
+
+      - name: Install dependencies
+        working-directory: scanner
+        run: python -m pip install -r requirements.txt
+
+      - name: Run scanner
+        working-directory: scanner
+        run: |
+          seed_url="${{ inputs.seed_url }}"
+          if [ -z "$seed_url" ]; then
+            seed_url="$DEFAULT_SEED_URL"
+          fi
+
+          reset_arg=""
+          if [ "${{ inputs.reset_state }}" = "true" ]; then
+            reset_arg="--reset"
+          fi
+
+          python mpspd.py scan \
+            --seed-url "$seed_url" \
+            --increment "${{ inputs.increment || '-1' }}" \
+            --output-dir ../public \
+            --concurrency "${{ inputs.concurrency || '50' }}" \
+            --max-runtime-seconds "${{ inputs.max_runtime_seconds || '21000' }}" \
+            --checkpoint-interval 100 \
+            --import-local \
+            $reset_arg
+
+      - name: Publish Pages branch
+        if: always()
+        working-directory: public
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          if [ ! -d .git ]; then
+            git init
+            git checkout -B gh-pages
+            git remote add origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A .
+          if git diff --cached --quiet; then
+            echo "No Pages changes to publish."
+          else
+            git commit -m "Update scan results"
+            git push origin HEAD:gh-pages
+          fi
+
+      - name: Dispatch next scan
+        if: success()
+        working-directory: scanner
+        run: |
+          continue_loop="${{ inputs.continue_loop }}"
+          if [ -z "$continue_loop" ]; then
+            continue_loop="true"
+          fi
+
+          if [ "$continue_loop" != "true" ]; then
+            echo "continue_loop is false; not dispatching another run."
+            exit 0
+          fi
+
+          if [ -f ../public/STOP ]; then
+            echo "STOP flag is present; not dispatching another run."
+            exit 0
+          fi
+
+          gh workflow run "$SCAN_WORKFLOW" \
+            --ref "${{ github.ref_name }}" \
+            -f increment="${{ inputs.increment || '-1' }}" \
+            -f concurrency="${{ inputs.concurrency || '50' }}" \
+            -f max_runtime_seconds="${{ inputs.max_runtime_seconds || '21000' }}" \
+            -f reset_state="false" \
+            -f continue_loop="true"

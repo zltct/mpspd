@@ -1,0 +1,44 @@
+name: MPSPD Watchdog
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+permissions:
+  actions: write
+  contents: read
+
+concurrency:
+  group: mpspd-watchdog
+  cancel-in-progress: true
+
+jobs:
+  ensure-running:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check scanner status
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SCAN_WORKFLOW: mpspd-scan.yml
+        run: |
+          active_count="$(gh run list \
+            --repo "$REPO" \
+            --workflow "$SCAN_WORKFLOW" \
+            --status in_progress \
+            --json databaseId \
+            --jq 'length')"
+          queued_count="$(gh run list \
+            --repo "$REPO" \
+            --workflow "$SCAN_WORKFLOW" \
+            --status queued \
+            --json databaseId \
+            --jq 'length')"
+
+          if [ "$active_count" != "0" ] || [ "$queued_count" != "0" ]; then
+            echo "Scanner already active or queued."
+            exit 0
+          fi
+
+          gh workflow run "$SCAN_WORKFLOW" --repo "$REPO" --ref "${{ github.ref_name }}" -f continue_loop="true"

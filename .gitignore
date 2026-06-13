@@ -163,3 +163,5 @@ cython_debug/
 *.jpeg
 README.md
 .DS_Store
+public/
+smoke-output/
