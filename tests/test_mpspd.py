@@ -88,6 +88,31 @@ class MpspdCoreTests(unittest.TestCase):
             self.assertIn(record.url, html)
             self.assertIn("scanned: 50", html)
 
+    def test_render_index_includes_manual_links_file(self):
+        with TemporaryDirectory() as temp_dir:
+            output_dir = Path(temp_dir)
+            index_path = output_dir / mpspd.INDEX_FILE
+            (output_dir / mpspd.MANUAL_FILE).write_text(
+                "# skipped links\n"
+                "https://images.example.test/325966/14582353/83/width=480,height=480\n",
+                encoding="utf-8",
+            )
+            state = mpspd.ScanState(
+                base_url="https://images.example.test",
+                profile_id=325966,
+                next_photo_id=14582352,
+                next_photo_number=82,
+                increment=-1,
+            )
+
+            mpspd.render_index(index_path, state, [])
+
+            html = index_path.read_text(encoding="utf-8")
+            self.assertIn("manual: 1", html)
+            self.assertIn("displayed: 1", html)
+            self.assertIn("https://images.example.test/325966/14582353/83/", html)
+            self.assertIn(mpspd.MANUAL_FILE, html)
+
     def test_init_command_can_seed_from_url(self):
         with TemporaryDirectory() as temp_dir:
             rc = mpspd.main(

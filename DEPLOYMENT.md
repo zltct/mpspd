@@ -74,6 +74,7 @@ The generated files are:
 - `index.html`
 - `state.json`
 - `found_links.jsonl`
+- `manual_links.txt` if you add manual/skipped links
 
 ## Running continuously
 
@@ -85,3 +86,19 @@ queued or in progress.
 
 To stop the loop, add a file named `STOP` to the `gh-pages` branch. Remove that
 file to allow future manual/watchdog starts.
+
+## Manual links
+
+Do not edit `index.html` directly. It is generated at the end of every scan run
+and those edits will be overwritten.
+
+To add skipped links manually, edit or create `manual_links.txt` on the
+`gh-pages` branch. Put one image URL per line:
+
+```text
+# skipped manually
+https://images.meupatrocinio.com/325966/14582353/83/
+```
+
+Blank lines and `#` comments are ignored. The next scanner publish will include
+those links in `index.html` alongside the automatically found links.

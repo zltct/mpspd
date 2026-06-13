@@ -25,6 +25,7 @@ DEFAULT_TIMEOUT_SECONDS = 12
 DEFAULT_REQUEST_DELAY_SECONDS = 0.0
 STATE_FILE = "state.json"
 FOUND_FILE = "found_links.jsonl"
+MANUAL_FILE = "manual_links.txt"
 INDEX_FILE = "index.html"
 STOP_FILE = "STOP"
 VERSION = "2.0.0"
@@ -187,6 +188,32 @@ def load_found_records(path: Path) -> list[FoundRecord]:
     return records
 
 
+def load_manual_records(path: Path) -> list[FoundRecord]:
+    if not path.exists():
+        return []
+
+    records: list[FoundRecord] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        url = line.strip()
+        if not url or url.startswith("#"):
+            continue
+
+        seed = parse_seed_url(url)
+        records.append(
+            FoundRecord(
+                url=seed.url,
+                profile_id=seed.profile_id,
+                photo_id=seed.photo_id,
+                photo_number=seed.photo_number,
+                content_type=None,
+                content_length=None,
+                status=0,
+                discovered_at="manual",
+            )
+        )
+    return records
+
+
 def append_found_record(path: Path, record: FoundRecord) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as file:
@@ -286,8 +313,13 @@ def render_index(
     records: list[FoundRecord],
     stop_enabled: bool = False,
 ) -> None:
+    manual_records = load_manual_records(path.parent / MANUAL_FILE)
+    display_records_by_key = {found_key(record): record for record in manual_records}
+    display_records_by_key.update({found_key(record): record for record in records})
+    display_records = list(display_records_by_key.values())
+
     rows = []
-    for record in sorted(records, key=lambda item: (item.photo_number, item.photo_id)):
+    for record in sorted(display_records, key=lambda item: (item.photo_number, item.photo_id)):
         rows.append(
             "<tr>"
             f"<td>{record.photo_number}</td>"
@@ -310,8 +342,8 @@ def render_index(
 <body>
   <h1>MPSPD found links</h1>
   <p>Updated: {html.escape(state.updated_at or utc_now())}</p>
-  <p>Status: {html.escape(state.last_status)}; scanned: {state.scanned}; found: {len(records)}; next photo id: {state.next_photo_id}; next photo number: {state.next_photo_number}; stop flag: {"on" if stop_enabled else "off"}</p>
-  <p>Raw files: <a href="./{FOUND_FILE}">{FOUND_FILE}</a> <a href="./{STATE_FILE}">{STATE_FILE}</a></p>
+  <p>Status: {html.escape(state.last_status)}; scanned: {state.scanned}; found: {len(records)}; manual: {len(manual_records)}; displayed: {len(display_records)}; next photo id: {state.next_photo_id}; next photo number: {state.next_photo_number}; stop flag: {"on" if stop_enabled else "off"}</p>
+  <p>Raw files: <a href="./{FOUND_FILE}">{FOUND_FILE}</a> <a href="./{MANUAL_FILE}">{MANUAL_FILE}</a> <a href="./{STATE_FILE}">{STATE_FILE}</a></p>
   <table border="1" cellpadding="4" cellspacing="0">
     <thead>
       <tr>
