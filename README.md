@@ -1,96 +1,124 @@
 # MPSPD
 
-Script em python 3 que faz download recursivo das imagens de usuários.
+MPSPD is a small Python scanner for probing image URLs that follow this shape:
 
-Esse script foi desenvolvido para aprender conceitos multitrheading, segurança da informação e python básico. Não me responsabilizo pelo mal uso da ferramenta, usada aqui apenas para fins didáticos.
+```text
+https://images.meupatrocinio.com/<profile_id>/<photo_id>/<photo_number>/
+```
 
-O nome MPSPD remete a 
-- __MP__ - site que fazemos o download das imagens
-- **SPD** - de speed, pois a primeira versão feita era linear e fazia que o teste ficasse muito mais lento que o atual, que roda em multi threading
+It stores found image links instead of downloading the full files. It can run locally, or from a public GitHub fork using GitHub Actions and GitHub Pages.
 
-## Requisitos
-Esse script roda em python 3e foi testado em Mac OS e Linux. Adaptaçõs podem ser necessárias para rodar em todos os sisteas operacionais
+Use this only for profiles and image URLs you are allowed to access. The scanner does not bypass authentication or permissions.
 
-O código usa algumas bibliotecas de python, entào caso necessa'rio, instale aquilo que for necessário, conforme erros na execução. Nesse primeiro momento vou manter para quem entende um pouco de python. As bibliotecas podem ser instaladas com o **PIP**
+## How It Works
 
-Claro, você precisa de acesso a internet e principalmente uma conta no **MP** para poder referencias a URL da imagem base.
+Start from one known image URL. The scanner probes nearby `photo_id` values while tracking the current `photo_number`.
 
-## Como Funciona?
+By default it scans backward:
 
-O site do **MP** salva todas as imagens de usuários em um sistema de CDN e respeita uma lógica para gerar o endereço das otos para cada perfil, como no exemplo abaixo:
+```text
+.../325966/15946361/89/
+.../325966/15946360/88/
+.../325966/15946359/87/
+```
 
-https://images.meupatrocinio.com/12511238/14882708/15/
+Use `--increment 1` to scan forward instead.
 
-Com esse exemplo posso explicar como é feita a composição da URL para que possamos entender como o script atua e ter uma melhor experiência. 
+Found links are written to:
 
-### images.meupatrocinio.com
-Aqui é o dominio do servidor onde estão as imagens. Não precisamos no preocuar com esse parametro, pois só precisamos dele para encontrar o servidor. Não é alterado durante a execução do script
+- `found_links.jsonl`
+- `state.json`
+- `index.html`
 
-### profileid - 12511238
-O próximo parametro é o **profile id**, que um ID do perfil do usuário. É aqui que podemos identificar o perfil dono dessa foto, acessando como no modelo abaixo em seu navegador preferico
+You can also add links manually in `manual_links.txt`; they will be included in the generated page.
 
-https://app.meupatrocinio.com/main/profile/**PROFILEID**/
+## Run Locally
 
-No exemplo ficaria
-https://app.meupatrocinio.com/main/profile/12511238/
+Install dependencies:
 
-### photoid - 14882708
-Aqui que comena a inteligencia desenvolvida na engenharia reversa do sistema. Cada vez que o usuário sobre uma foto, essa foto tem um **photoid** único. Duas fotos não podem ter o mesmo **photoid** 
-Se eu dubir 2 fotos ao mesmo tempo em um perfil novo, o sistema pega o último **photoid** livre e associa a primeira foto e gera um novo **photoid**, incrementalmente para a segunda foto
+```bash
+python -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements.txt
+```
 
-### photonumber - 15
-Aqui é a sequencia da foto no perfil. Nesse exemplo podemos dizer que o número 15 nos diz que essa é a foto que foi subida pelo sistema pelo décima quinta vez. Mas já perceb que essa regra pode ser inválida em alguns casos, prvavelmente por algum erro do sistema do MP, que pode gerar um número repetido quando se realiza o upload. 
+On Windows PowerShell:
 
-### O que o script faz?
-O script tenta, atravez de uma URL de referencia de uma foto existente, tentar fazer o download da URL. Caso exista uma foto nesse endereço, ele salva no diretório de execução e incremente ou decrementa os valores de photoid e photonumber para uma nova tentativa em loop, realizando uma recursividade.
+```powershell
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+```
 
-Uma coisa interessante é que quando um usuário apaga uma foto do perfil ou a foto não foi permitida pelos moderadores, a imagem ainda esta disponível no servidor, proporcionando acesso a algumas fotos +18
+Run a short scan:
 
-## Instalação
+```bash
+python mpspd.py scan \
+  --seed-url "https://images.meupatrocinio.com/PROFILE_ID/PHOTO_ID/PHOTO_NUMBER/" \
+  --output-dir public \
+  --increment -1 \
+  --concurrency 50 \
+  --max-runtime-seconds 300
+```
 
-Copie o arquivo **mpspd.py** para uma pasta e execute conforme os paramtros necessários
+Open `public/index.html` to view results.
 
-ATENÇÃO - Pode ser necessário instalar o módulo 'requests'. Para isso execute em linha de comando um dos comandos abaixo:
-* pip install requests
-* pip3 install requests
-* python3 -m pip install requests
+## Run In A GitHub Fork
 
-## Como Usar
+1. Fork this repository.
+2. In your fork, go to **Settings -> Actions -> General** and ensure workflows are allowed.
+3. Go to **Settings -> Pages**.
+4. Select **Deploy from a branch**.
+5. Use branch `gh-pages` and folder `/` after the first scan creates that branch.
+6. Go to **Settings -> Secrets and variables -> Actions -> Variables**.
+7. Add a repository variable:
 
-Eu sugiro que você crie uma pasta para cada perfil do **MP** com o nome do usuário que você vai puxar a imagem. Se o usuário, por exemplo, se chama _Maria_, crie uma pasta _Maria_ e copie para dentro dessa pasta o script **mpspd.py**.
+```text
+MPSPD_SEED_URL=https://images.meupatrocinio.com/PROFILE_ID/PHOTO_ID/PHOTO_NUMBER/
+```
 
-Via terminal, acesse essa pasta com o comando **cd**
+8. Open the **Actions** tab.
+9. Run **MPSPD Scan** manually.
 
-Acesse o perfil da pessoa que você quer puxar as fotos em su navegador preferido
+The scanner runs for about 5 hours and 50 minutes by default, publishes `gh-pages`, then starts the next scan. The watchdog workflow runs every 5 minutes and starts a scan if none is queued or running.
 
-Com o perfil aberto, você tem as *thumbs* de todas as fotos. Copie o endereço de uma foto. Sugiro que você em vez de ara todas as fotos do perfil em abas diferentes para poder identificar quais "buracos" existem nas mídias de photonumber e depois abrir cada aba, copiar  URL para executar o comando.
+## Workflow Inputs
 
-A URLs das photos podem vir assim:
+`MPSPD Scan` accepts these manual inputs:
 
-- https://images.meupatrocinio.com/12511238/14882708/15/width=480,height=480 ___VALIDO___
-- https://images.meupatrocinio.com/12511238/14882708/15/width=800,height=800 ___VALIDO___
-- https://images.meupatrocinio.com/12511238/14882708/15/ ___VALIDO___
+- `seed_url`: starting image URL; used when there is no state or when resetting.
+- `increment`: `-1` to scan backward, `1` to scan forward.
+- `concurrency`: concurrent HTTP probes. Default: `50`.
+- `max_runtime_seconds`: scan duration before publishing and restarting. Default: `21000`.
+- `reset_state`: reset from `seed_url`.
+- `continue_loop`: start another scan when this run finishes.
 
-No terminal, já dentro da pasta criada par ao script, execute:
+Use a lower `max_runtime_seconds`, such as `900` or `1800`, if you want the public page to update every 15-30 minutes instead of after the long run completes.
 
-python3 mpspd.py [URL da foto] {-1}
+## Manual Links
 
-Você só vai colocar o -1 ao final caso deseje que o script decremente as URLs, senão deixe sem esse número.
+Do not edit `index.html` directly. It is generated and will be overwritten.
 
-Exemplo:
+To add skipped or known links, edit `manual_links.txt` on the `gh-pages` branch. Put one URL per line:
 
-**_python3 mpspd.py https://images.meupatrocinio.com/12511238/14882708/15/width=480,height=480_**
+```text
+# optional comments are allowed
+https://images.meupatrocinio.com/PROFILE_ID/PHOTO_ID/PHOTO_NUMBER/
+```
 
-Nesse primeiro exemplo, o arquivo 15_14882708_14882708.jpeg é salvo e o script vai procurar o arquivo 16
+Blank lines and lines starting with `#` are ignored.
 
-**_python3 mpspd.py https://images.meupatrocinio.com/12511238/14882708/15/width=480,height=480_ -1**
+## Stop Or Resume
 
-Já no segundo, o mesmo arquivo é salvo e o script vai procurar o arquivo 14 na sequencia.
+To stop the loop, add a file named `STOP` to the `gh-pages` branch. Remove it to allow future manual or watchdog starts.
 
-PARA INTERROMPER O SCRIPT USE CRTL+C, repetidas vezes, até o script parar todas as threads.
+To resume from a new URL, run **MPSPD Scan** manually with:
 
-## USO AVANÇADO
-Eu deixei um valor baixo de trheads. Se voce abrir o código, pode procurar pela variável:
-num_threads = 10
+- `seed_url` set to the new URL
+- `reset_state=true`
+- `increment=-1` or `1`
 
-O valor esta baixo para rodar em computadores velhos. Se você quer melhorar e aumentar a velocidade de procura para um único perfil, você pode testar valores mais altos, ou se achar que o script esta derrubando muitos recursos de sua máquina, você pode abaixar esse valor. 
+## Tests
+
+```bash
+python -m unittest discover -s tests
+```
