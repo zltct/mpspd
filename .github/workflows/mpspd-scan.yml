@@ -16,9 +16,9 @@ on:
         required: false
         default: "50"
       max_runtime_seconds:
-        description: "Keep below the 6 hour GitHub-hosted runner job limit."
+        description: "Scan duration before publishing and dispatching the next run."
         required: false
-        default: "21000"
+        default: "1800"
       reset_state:
         description: "Reset state from seed_url before scanning."
         required: false
@@ -93,7 +93,7 @@ jobs:
             --increment "${{ inputs.increment || '-1' }}" \
             --output-dir ../public \
             --concurrency "${{ inputs.concurrency || '50' }}" \
-            --max-runtime-seconds "${{ inputs.max_runtime_seconds || '21000' }}" \
+            --max-runtime-seconds "${{ inputs.max_runtime_seconds || '1800' }}" \
             --checkpoint-interval 100 \
             --import-local \
             $reset_arg
@@ -142,6 +142,6 @@ jobs:
             --ref "${{ github.ref_name }}" \
             -f increment="${{ inputs.increment || '-1' }}" \
             -f concurrency="${{ inputs.concurrency || '50' }}" \
-            -f max_runtime_seconds="${{ inputs.max_runtime_seconds || '21000' }}" \
+            -f max_runtime_seconds="${{ inputs.max_runtime_seconds || '1800' }}" \
             -f reset_state="false" \
             -f continue_loop="true"

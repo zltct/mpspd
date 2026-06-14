@@ -79,7 +79,7 @@ MPSPD_SEED_URL=https://images.meupatrocinio.com/PROFILE_ID/PHOTO_ID/PHOTO_NUMBER
 8. Open the **Actions** tab.
 9. Run **MPSPD Scan** manually.
 
-The scanner runs for about 5 hours and 50 minutes by default, publishes `gh-pages`, then starts the next scan. The watchdog workflow runs every 5 minutes and starts a scan if none is queued or running.
+The scanner runs for about 30 minutes by default, publishes `gh-pages`, then starts the next scan. The watchdog workflow runs every 5 minutes and starts a scan if none is queued or running.
 
 ## Workflow Inputs
 
@@ -88,11 +88,11 @@ The scanner runs for about 5 hours and 50 minutes by default, publishes `gh-page
 - `seed_url`: starting image URL; used when there is no state or when resetting.
 - `increment`: `-1` to scan backward, `1` to scan forward.
 - `concurrency`: concurrent HTTP probes. Default: `50`.
-- `max_runtime_seconds`: scan duration before publishing and restarting. Default: `21000`.
+- `max_runtime_seconds`: scan duration before publishing and restarting. Default: `1800`.
 - `reset_state`: reset from `seed_url`.
 - `continue_loop`: start another scan when this run finishes.
 
-Use a lower `max_runtime_seconds`, such as `900` or `1800`, if you want the public page to update every 15-30 minutes instead of after the long run completes.
+Use a lower `max_runtime_seconds`, such as `900`, if you want the public page to update about every 15 minutes.
 
 ## Manual Links
 
