@@ -1,0 +1,16 @@
+{
+  "base_url": "https://images.meupatrocinio.com",
+  "consecutive_errors": 4,
+  "found": 1,
+  "increment": -1,
+  "last_error": null,
+  "last_found_url": "https://images.meupatrocinio.com/325966/23670390/99/",
+  "last_probe_status": 403,
+  "last_status": "miss:403",
+  "last_url": "https://images.meupatrocinio.com/325966/23542091/98/",
+  "next_photo_id": 23542089,
+  "next_photo_number": 98,
+  "profile_id": 325966,
+  "scanned": 128301,
+  "updated_at": "2026-06-14T03:39:45+00:00"
+}
