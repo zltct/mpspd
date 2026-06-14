@@ -4,13 +4,13 @@
   "found": 1,
   "increment": -1,
   "last_error": null,
-  "last_found_url": "https://images.meupatrocinio.com/325966/23670390/99/",
+  "last_found_url": null,
   "last_probe_status": 403,
   "last_status": "miss:403",
-  "last_url": "https://images.meupatrocinio.com/325966/20415541/98/",
-  "next_photo_id": 20415539,
-  "next_photo_number": 98,
+  "last_url": "https://images.meupatrocinio.com/325966/15934467/90/",
+  "next_photo_id": 15934466,
+  "next_photo_number": 90,
   "profile_id": 325966,
-  "scanned": 3254851,
-  "updated_at": "2026-06-14T08:37:15+00:00"
+  "scanned": 11900,
+  "updated_at": "2026-06-14T08:51:48+00:00"
 }
