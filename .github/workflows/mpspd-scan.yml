@@ -34,7 +34,7 @@ on:
       health_check_interval:
         description: "Verify the last found image after this many scanned candidates. 0 disables."
         required: false
-        default: "50"
+        default: "5000"
       reset_state:
         description: "Reset state from seed_url before scanning."
         required: false
@@ -114,7 +114,7 @@ jobs:
             --checkpoint-interval 100 \
             --request-delay "${{ inputs.request_delay || '0' }}" \
             --log-interval "${{ inputs.log_interval || '5000' }}" \
-            --health-check-interval "${{ inputs.health_check_interval || '50' }}" \
+            --health-check-interval "${{ inputs.health_check_interval || '5000' }}" \
             --import-local \
             $reset_arg
 
@@ -166,6 +166,6 @@ jobs:
             -f max_candidates="${{ inputs.max_candidates || '0' }}" \
             -f request_delay="${{ inputs.request_delay || '0' }}" \
             -f log_interval="${{ inputs.log_interval || '5000' }}" \
-            -f health_check_interval="${{ inputs.health_check_interval || '50' }}" \
+            -f health_check_interval="${{ inputs.health_check_interval || '5000' }}" \
             -f reset_state="false" \
             -f continue_loop="true"

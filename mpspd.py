@@ -27,7 +27,7 @@ DEFAULT_CHECKPOINT_INTERVAL = 100
 DEFAULT_TIMEOUT_SECONDS = 12
 DEFAULT_REQUEST_DELAY_SECONDS = 0.0
 DEFAULT_LOG_INTERVAL = 5000
-DEFAULT_HEALTH_CHECK_INTERVAL = 50
+DEFAULT_HEALTH_CHECK_INTERVAL = 5000
 STATE_FILE = "state.json"
 FOUND_FILE = "found_links.jsonl"
 MANUAL_FILE = "manual_links.txt"
@@ -636,6 +636,8 @@ async def run_scan(args: argparse.Namespace) -> int:
     delay_seconds = max(0.0, args.request_delay)
     health_check_interval = max(0, args.health_check_interval)
     health_counter = health_check_interval
+    last_health_ok_next_photo_id = state.next_photo_id
+    last_health_ok_next_photo_number = state.next_photo_number
     last_batch_start: Candidate | None = None
     last_batch_end: Candidate | None = None
     print(
@@ -672,7 +674,16 @@ async def run_scan(args: argparse.Namespace) -> int:
                     timeout_seconds=args.timeout,
                     retries=max(args.retries, 2),
                 ):
+                    state.next_photo_id = last_health_ok_next_photo_id
+                    state.next_photo_number = last_health_ok_next_photo_number
+                    print(
+                        "HEALTH_ROLLBACK "
+                        f"resume={state.next_photo_id}/{state.next_photo_number}",
+                        flush=True,
+                    )
                     break
+                last_health_ok_next_photo_id = state.next_photo_id
+                last_health_ok_next_photo_number = state.next_photo_number
                 health_counter = 0
 
             if args.max_candidates:
@@ -787,8 +798,10 @@ async def run_scan(args: argparse.Namespace) -> int:
 
             if found_in_batch:
                 state.last_status = "found"
-                health_counter = health_check_interval
                 reconcile_known_anchors(state, records + manual_records)
+                last_health_ok_next_photo_id = state.next_photo_id
+                last_health_ok_next_photo_number = state.next_photo_number
+                health_counter = 0
             else:
                 health_counter += len(results)
 
@@ -834,6 +847,8 @@ async def run_scan(args: argparse.Namespace) -> int:
         f"Done: {state.last_status}; scanned={state.scanned}; "
         f"found={len(records)}; next={state.next_photo_id}/{state.next_photo_number}"
     )
+    if state.last_status.startswith("health_check_failed:"):
+        return 1
     return 0
 
 

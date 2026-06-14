@@ -357,7 +357,7 @@ class MpspdCoreTests(unittest.TestCase):
                     ]
                 )
 
-                self.assertEqual(rc, 0)
+                self.assertEqual(rc, 1)
                 repaired = mpspd.load_state(output_dir / mpspd.STATE_FILE)
                 self.assertEqual(repaired.last_status, "health_check_failed:403")
                 self.assertEqual(repaired.scanned, 0)
@@ -365,6 +365,53 @@ class MpspdCoreTests(unittest.TestCase):
         finally:
             server.shutdown()
             server.server_close()
+
+    def test_health_check_failure_rolls_back_to_last_verified_cursor(self):
+        with TemporaryDirectory() as temp_dir:
+            seed_url = "https://images.example.test/325966/100/10/"
+            first_image_probe = True
+
+            def probe_once(candidate, timeout_seconds):
+                nonlocal first_image_probe
+                if candidate.photo_id == 100 and candidate.photo_number == 10 and first_image_probe:
+                    first_image_probe = False
+                    return mpspd.ProbeResult(
+                        candidate=candidate,
+                        status=200,
+                        found=True,
+                        content_type="image/jpeg",
+                        content_length=123,
+                    )
+                return mpspd.ProbeResult(candidate=candidate, status=403, found=False)
+
+            with patch("mpspd.probe_once", side_effect=probe_once):
+                rc = mpspd.main(
+                    [
+                        "scan",
+                        "--seed-url",
+                        seed_url,
+                        "--output-dir",
+                        temp_dir,
+                        "--max-candidates",
+                        "4",
+                        "--concurrency",
+                        "1",
+                        "--max-runtime-seconds",
+                        "5",
+                        "--retries",
+                        "0",
+                        "--health-check-interval",
+                        "2",
+                    ]
+                )
+
+            self.assertEqual(rc, 1)
+            repaired = mpspd.load_state(Path(temp_dir) / mpspd.STATE_FILE)
+            records = mpspd.load_found_records(Path(temp_dir) / mpspd.FOUND_FILE)
+            self.assertEqual(len(records), 1)
+            self.assertEqual(repaired.last_status, "health_check_failed:403")
+            self.assertEqual(repaired.next_photo_id, 99)
+            self.assertEqual(repaired.next_photo_number, 9)
 
     def test_scan_uses_manual_anchors_to_repair_bad_negative_state(self):
         class Handler(BaseHTTPRequestHandler):
