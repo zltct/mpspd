@@ -56,7 +56,7 @@ python mpspd.py scan \
   --seed-url "https://images.meupatrocinio.com/PROFILE_ID/PHOTO_ID/PHOTO_NUMBER/" \
   --output-dir public \
   --increment -1 \
-  --concurrency 50 \
+  --concurrency 10 \
   --max-runtime-seconds 300
 ```
 
@@ -87,7 +87,7 @@ The scanner runs for about 30 minutes by default, publishes `gh-pages`, then sta
 
 - `seed_url`: starting image URL; used when there is no state or when resetting.
 - `increment`: `-1` to scan backward, `1` to scan forward.
-- `concurrency`: concurrent HTTP probes. Default: `50`.
+- `concurrency`: concurrent HTTP probes. Default: `10`.
 - `max_runtime_seconds`: scan duration before publishing and restarting. Default: `1800`.
 - `reset_state`: reset from `seed_url`.
 - `continue_loop`: start another scan when this run finishes.
@@ -110,6 +110,8 @@ Blank lines and lines starting with `#` are ignored.
 ## Stop Or Resume
 
 To stop the loop, add a file named `STOP` to the `gh-pages` branch. Remove it to allow future manual or watchdog starts.
+
+When the image host starts returning `403` for an already-found image, the scanner rolls back to the last verified cursor and stops. The watchdog will wait before starting it again. Set `MPSPD_HEALTH_COOLDOWN_SECONDS` as an Actions repository variable to change the cooldown; the default is 1800 seconds.
 
 To resume from a new URL, run **MPSPD Scan** manually with:
 

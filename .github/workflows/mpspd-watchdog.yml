@@ -22,6 +22,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           SCAN_WORKFLOW: mpspd-scan.yml
+          HEALTH_COOLDOWN_SECONDS: ${{ vars.MPSPD_HEALTH_COOLDOWN_SECONDS || '1800' }}
         run: |
           active_count="$(gh run list \
             --repo "$REPO" \
@@ -39,6 +40,49 @@ jobs:
           if [ "$active_count" != "0" ] || [ "$queued_count" != "0" ]; then
             echo "Scanner already active or queued."
             exit 0
+          fi
+
+          if ! [[ "$HEALTH_COOLDOWN_SECONDS" =~ ^[0-9]+$ ]]; then
+            HEALTH_COOLDOWN_SECONDS=1800
+          fi
+
+          state_file="$(mktemp)"
+          if gh api "repos/$REPO/contents/state.json?ref=gh-pages" --jq '.content' 2>/dev/null | base64 -d > "$state_file"; then
+            last_status="$(python - "$state_file" <<'PY'
+          import json
+          import sys
+
+          with open(sys.argv[1], encoding="utf-8") as file:
+              data = json.load(file)
+          print(data.get("last_status") or "")
+          PY
+          )"
+            state_age_seconds="$(python - "$state_file" <<'PY'
+          import datetime as dt
+          import json
+          import sys
+
+          with open(sys.argv[1], encoding="utf-8") as file:
+              data = json.load(file)
+
+          updated_at = data.get("updated_at")
+          if not updated_at:
+              print(999999999)
+              raise SystemExit
+
+          updated = dt.datetime.fromisoformat(updated_at.replace("Z", "+00:00"))
+          now = dt.datetime.now(dt.timezone.utc)
+          print(max(0, int((now - updated).total_seconds())))
+          PY
+          )"
+
+            if [[ "$last_status" == health_check_failed:* ]] && [ "$state_age_seconds" -lt "$HEALTH_COOLDOWN_SECONDS" ]; then
+              remaining=$((HEALTH_COOLDOWN_SECONDS - state_age_seconds))
+              echo "Scanner is cooling down after $last_status; $remaining seconds remaining."
+              exit 0
+            fi
+          else
+            echo "No published state found; starting scanner."
           fi
 
           gh workflow run "$SCAN_WORKFLOW" --repo "$REPO" --ref "${{ github.ref_name }}" -f continue_loop="true"

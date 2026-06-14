@@ -14,7 +14,7 @@ on:
       concurrency:
         description: "Concurrent HTTP probes."
         required: false
-        default: "50"
+        default: "10"
       max_runtime_seconds:
         description: "Scan duration before publishing and dispatching the next run."
         required: false
@@ -108,7 +108,7 @@ jobs:
             --seed-url "$seed_url" \
             --increment "${{ inputs.increment || '-1' }}" \
             --output-dir ../public \
-            --concurrency "${{ inputs.concurrency || '50' }}" \
+            --concurrency "${{ inputs.concurrency || '10' }}" \
             --max-runtime-seconds "${{ inputs.max_runtime_seconds || '1800' }}" \
             --max-candidates "${{ inputs.max_candidates || '0' }}" \
             --checkpoint-interval 100 \
@@ -161,7 +161,7 @@ jobs:
           gh workflow run "$SCAN_WORKFLOW" \
             --ref "${{ github.ref_name }}" \
             -f increment="${{ inputs.increment || '-1' }}" \
-            -f concurrency="${{ inputs.concurrency || '50' }}" \
+            -f concurrency="${{ inputs.concurrency || '10' }}" \
             -f max_runtime_seconds="${{ inputs.max_runtime_seconds || '1800' }}" \
             -f max_candidates="${{ inputs.max_candidates || '0' }}" \
             -f request_delay="${{ inputs.request_delay || '0' }}" \
