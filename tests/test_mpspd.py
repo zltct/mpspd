@@ -296,6 +296,80 @@ class MpspdCoreTests(unittest.TestCase):
             server.shutdown()
             server.server_close()
 
+    def test_transient_probe_errors_are_retried_on_next_run(self):
+        with TemporaryDirectory() as temp_dir:
+            seed_url = "https://images.example.test/325966/12345/10/"
+
+            def reset_probe(candidate, timeout_seconds):
+                return mpspd.ProbeResult(
+                    candidate=candidate,
+                    status=None,
+                    found=False,
+                    error="conn_reset",
+                )
+
+            with patch("mpspd.probe_once", side_effect=reset_probe):
+                rc = mpspd.main(
+                    [
+                        "scan",
+                        "--seed-url",
+                        seed_url,
+                        "--output-dir",
+                        temp_dir,
+                        "--max-candidates",
+                        "1",
+                        "--concurrency",
+                        "1",
+                        "--max-runtime-seconds",
+                        "5",
+                        "--retries",
+                        "0",
+                    ]
+                )
+
+            self.assertEqual(rc, 0)
+            retry_records = mpspd.load_retry_records(Path(temp_dir) / mpspd.RETRY_FILE)
+            self.assertEqual(len(retry_records), 1)
+            state_after_error = mpspd.load_state(Path(temp_dir) / mpspd.STATE_FILE)
+            self.assertEqual(state_after_error.next_photo_id, 12344)
+            self.assertEqual(state_after_error.next_photo_number, 10)
+
+            def found_probe(candidate, timeout_seconds):
+                return mpspd.ProbeResult(
+                    candidate=candidate,
+                    status=200,
+                    found=True,
+                    content_type="image/jpeg",
+                    content_length=123,
+                )
+
+            with patch("mpspd.probe_once", side_effect=found_probe):
+                rc = mpspd.main(
+                    [
+                        "scan",
+                        "--output-dir",
+                        temp_dir,
+                        "--max-candidates",
+                        "1",
+                        "--concurrency",
+                        "1",
+                        "--max-runtime-seconds",
+                        "5",
+                        "--retries",
+                        "0",
+                    ]
+                )
+
+            self.assertEqual(rc, 0)
+            records = mpspd.load_found_records(Path(temp_dir) / mpspd.FOUND_FILE)
+            retry_records = mpspd.load_retry_records(Path(temp_dir) / mpspd.RETRY_FILE)
+            state_after_retry = mpspd.load_state(Path(temp_dir) / mpspd.STATE_FILE)
+            self.assertEqual(len(records), 1)
+            self.assertEqual(records[0].photo_id, 12345)
+            self.assertEqual(retry_records, {})
+            self.assertEqual(state_after_retry.next_photo_id, 12344)
+            self.assertEqual(state_after_retry.next_photo_number, 9)
+
 
 if __name__ == "__main__":
     unittest.main()

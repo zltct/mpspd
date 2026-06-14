@@ -39,6 +39,7 @@ REQUEST_HEADERS = {
 STATE_FILE = "state.json"
 FOUND_FILE = "found_links.jsonl"
 MANUAL_FILE = "manual_links.txt"
+RETRY_FILE = "retry_queue.jsonl"
 INDEX_FILE = "index.html"
 STOP_FILE = "STOP"
 VERSION = "2.0.0"
@@ -116,6 +117,34 @@ class ProbeResult:
     content_type: str | None = None
     content_length: int | None = None
     error: str | None = None
+
+
+@dataclass
+class RetryRecord:
+    base_url: str
+    profile_id: int
+    photo_id: int
+    photo_number: int
+    attempts: int = 0
+    last_status: str | None = None
+    updated_at: str | None = None
+
+    @property
+    def url(self) -> str:
+        return build_image_url(
+            self.base_url,
+            self.profile_id,
+            self.photo_id,
+            self.photo_number,
+        )
+
+    def to_candidate(self) -> Candidate:
+        return Candidate(
+            base_url=self.base_url,
+            profile_id=self.profile_id,
+            photo_id=self.photo_id,
+            photo_number=self.photo_number,
+        )
 
 
 def utc_now() -> str:
@@ -237,8 +266,65 @@ def found_key(record: FoundRecord) -> tuple[int, int, int]:
     return (record.profile_id, record.photo_id, record.photo_number)
 
 
+def candidate_key(candidate: Candidate) -> tuple[int, int, int]:
+    return (candidate.profile_id, candidate.photo_id, candidate.photo_number)
+
+
 def anchor_key(record: FoundRecord) -> tuple[int, int]:
     return (record.profile_id, record.photo_number)
+
+
+def retry_key(record: RetryRecord) -> tuple[int, int, int]:
+    return (record.profile_id, record.photo_id, record.photo_number)
+
+
+def load_retry_records(path: Path) -> dict[tuple[int, int, int], RetryRecord]:
+    if not path.exists():
+        return {}
+
+    records: dict[tuple[int, int, int], RetryRecord] = {}
+    with path.open("r", encoding="utf-8") as file:
+        for line in file:
+            line = line.strip()
+            if not line:
+                continue
+            record = RetryRecord(**json.loads(line))
+            records[retry_key(record)] = record
+    return records
+
+
+def save_retry_records(path: Path, records: dict[tuple[int, int, int], RetryRecord]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if not records:
+        if path.exists():
+            path.unlink()
+        return
+
+    ordered = sorted(records.values(), key=lambda item: (item.photo_number, item.photo_id))
+    with path.open("w", encoding="utf-8") as file:
+        for record in ordered:
+            file.write(json.dumps(asdict(record), sort_keys=True) + "\n")
+
+
+def remember_retry(
+    records: dict[tuple[int, int, int], RetryRecord],
+    candidate: Candidate,
+    status: str,
+) -> None:
+    key = candidate_key(candidate)
+    record = records.get(key)
+    if record is None:
+        record = RetryRecord(
+            base_url=candidate.base_url,
+            profile_id=candidate.profile_id,
+            photo_id=candidate.photo_id,
+            photo_number=candidate.photo_number,
+        )
+        records[key] = record
+
+    record.attempts += 1
+    record.last_status = status
+    record.updated_at = utc_now()
 
 
 def reconcile_known_anchors(state: ScanState, records: list[FoundRecord]) -> int:
@@ -373,6 +459,7 @@ def render_index(
     stop_enabled: bool = False,
 ) -> None:
     manual_records = load_manual_records(path.parent / MANUAL_FILE)
+    retry_records = load_retry_records(path.parent / RETRY_FILE)
     display_records_by_key = {found_key(record): record for record in manual_records}
     display_records_by_key.update({found_key(record): record for record in records})
     display_records = list(display_records_by_key.values())
@@ -401,8 +488,8 @@ def render_index(
 <body>
   <h1>MPSPD found links</h1>
   <p>Updated: {html.escape(state.updated_at or utc_now())}</p>
-  <p>Status: {html.escape(state.last_status)}; scanned: {state.scanned}; found: {len(records)}; manual: {len(manual_records)}; displayed: {len(display_records)}; next photo id: {state.next_photo_id}; next photo number: {state.next_photo_number}; stop flag: {"on" if stop_enabled else "off"}</p>
-  <p>Raw files: <a href="./{FOUND_FILE}">{FOUND_FILE}</a> <a href="./{MANUAL_FILE}">{MANUAL_FILE}</a> <a href="./{STATE_FILE}">{STATE_FILE}</a></p>
+  <p>Status: {html.escape(state.last_status)}; scanned: {state.scanned}; found: {len(records)}; manual: {len(manual_records)}; retry: {len(retry_records)}; displayed: {len(display_records)}; next photo id: {state.next_photo_id}; next photo number: {state.next_photo_number}; stop flag: {"on" if stop_enabled else "off"}</p>
+  <p>Raw files: <a href="./{FOUND_FILE}">{FOUND_FILE}</a> <a href="./{RETRY_FILE}">{RETRY_FILE}</a> <a href="./{MANUAL_FILE}">{MANUAL_FILE}</a> <a href="./{STATE_FILE}">{STATE_FILE}</a></p>
   <table border="1" cellpadding="4" cellspacing="0">
     <thead>
       <tr>
@@ -490,6 +577,7 @@ async def run_scan(args: argparse.Namespace) -> int:
     found_path = output_dir / FOUND_FILE
     state_path = output_dir / STATE_FILE
     index_path = output_dir / INDEX_FILE
+    retry_path = output_dir / RETRY_FILE
     stop_path = output_dir / STOP_FILE
 
     state = load_state(state_path)
@@ -523,6 +611,7 @@ async def run_scan(args: argparse.Namespace) -> int:
 
     records = load_found_records(found_path)
     manual_records = load_manual_records(output_dir / MANUAL_FILE)
+    retry_records = load_retry_records(retry_path)
     reconcile_known_anchors(state, records + manual_records)
     state.found = len(records)
     seen = {found_key(record) for record in records}
@@ -536,7 +625,7 @@ async def run_scan(args: argparse.Namespace) -> int:
         "Starting scan: "
         f"profile={state.profile_id} next={state.next_photo_id}/{state.next_photo_number} "
         f"increment={state.increment} concurrency={args.concurrency} "
-        f"runtime={args.max_runtime_seconds}s found={len(records)}",
+        f"runtime={args.max_runtime_seconds}s found={len(records)} retry={len(retry_records)}",
         flush=True,
     )
 
@@ -566,7 +655,16 @@ async def run_scan(args: argparse.Namespace) -> int:
                 break
 
             candidates = []
-            for _ in range(batch_size):
+            for key, retry_record in sorted(
+                retry_records.items(),
+                key=lambda item: (item[1].attempts, item[1].photo_number, item[1].photo_id),
+            ):
+                if len(candidates) >= batch_size:
+                    break
+                candidates.append(retry_record.to_candidate())
+                total_candidates += 1
+
+            for _ in range(batch_size - len(candidates)):
                 candidate = candidate_from_state(state)
                 candidates.append(candidate)
                 advance_state(state)
@@ -603,6 +701,7 @@ async def run_scan(args: argparse.Namespace) -> int:
                 state.last_error = result.error
 
                 if result.found:
+                    retry_records.pop(candidate_key(result.candidate), None)
                     key = (
                         result.candidate.profile_id,
                         result.candidate.photo_id,
@@ -624,7 +723,8 @@ async def run_scan(args: argparse.Namespace) -> int:
                         seen.add(key)
                         state.found = len(records)
 
-                    advance_after_found(state, result.candidate)
+                    if result.candidate.photo_number == state.next_photo_number:
+                        advance_after_found(state, result.candidate)
                     state.last_found_url = result.candidate.url
                     state.consecutive_errors = 0
                     state.last_error = None
@@ -641,8 +741,14 @@ async def run_scan(args: argparse.Namespace) -> int:
                 elif result.status in {429, 500, 502, 503, 504} or result.error:
                     state.consecutive_errors += 1
                     state.last_status = f"transient_error:{result.status or result.error}"
+                    remember_retry(
+                        retry_records,
+                        result.candidate,
+                        str(result.status or result.error or "unknown"),
+                    )
                 else:
                     state.last_status = f"miss:{result.status}"
+                    retry_records.pop(candidate_key(result.candidate), None)
 
                 status_counts[str(result.status or result.error or "unknown")] += 1
 
@@ -659,6 +765,7 @@ async def run_scan(args: argparse.Namespace) -> int:
             checkpoint_counter += len(results)
             if checkpoint_counter >= args.checkpoint_interval:
                 save_state(state_path, state)
+                save_retry_records(retry_path, retry_records)
                 render_index(index_path, state, records, stop_enabled=stop_path.exists())
                 checkpoint_counter = 0
 
@@ -670,7 +777,7 @@ async def run_scan(args: argparse.Namespace) -> int:
                 print(
                     "PROGRESS "
                     f"scanned={state.scanned} found={len(records)} "
-                    f"next={state.next_photo_id}/{state.next_photo_number} "
+                    f"retry={len(retry_records)} next={state.next_photo_id}/{state.next_photo_number} "
                     f"last={state.last_url} rate={state.scanned / elapsed:.1f}/s "
                     f"statuses=[{common_statuses}]",
                     flush=True,
@@ -682,6 +789,7 @@ async def run_scan(args: argparse.Namespace) -> int:
 
     state.found = len(records)
     save_state(state_path, state)
+    save_retry_records(retry_path, retry_records)
     render_index(index_path, state, records, stop_enabled=stop_path.exists())
     print(
         f"Done: {state.last_status}; scanned={state.scanned}; "
