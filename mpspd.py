@@ -9,11 +9,14 @@ import os
 import re
 import sys
 import time
+from collections import Counter
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
+from urllib.request import Request, urlopen
 
 
 DEFAULT_BASE_URL = "https://images.meupatrocinio.com"
@@ -23,6 +26,15 @@ DEFAULT_MAX_RUNTIME_SECONDS = 30 * 60
 DEFAULT_CHECKPOINT_INTERVAL = 100
 DEFAULT_TIMEOUT_SECONDS = 12
 DEFAULT_REQUEST_DELAY_SECONDS = 0.0
+DEFAULT_LOG_INTERVAL = 5000
+REQUEST_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/126.0 Safari/537.36"
+    ),
+    "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+}
 STATE_FILE = "state.json"
 FOUND_FILE = "found_links.jsonl"
 MANUAL_FILE = "manual_links.txt"
@@ -404,7 +416,7 @@ async def probe_url(
 ) -> ProbeResult:
     for attempt in range(retries + 1):
         try:
-            result = await probe_once(session, candidate, timeout_seconds)
+            result = await asyncio.to_thread(probe_once, candidate, timeout_seconds)
             if result.status in {429, 500, 502, 503, 504} and attempt < retries:
                 await asyncio.sleep(min(10.0, 0.5 * (2**attempt)))
                 continue
@@ -417,43 +429,44 @@ async def probe_url(
     return ProbeResult(candidate=candidate, status=None, found=False, error="unknown probe failure")
 
 
-async def probe_once(session: Any, candidate: Candidate, timeout_seconds: float) -> ProbeResult:
-    import aiohttp
+def probe_once(candidate: Candidate, timeout_seconds: float) -> ProbeResult:
+    head_result = probe_request(candidate, method="HEAD", timeout_seconds=timeout_seconds)
+    if head_result.status not in {403, 405}:
+        return head_result
+    return probe_request(candidate, method="GET", timeout_seconds=timeout_seconds)
 
-    headers = {"User-Agent": f"mpspd/{VERSION}"}
-    timeout = aiohttp.ClientTimeout(total=timeout_seconds)
-    async with session.head(candidate.url, allow_redirects=True, headers=headers, timeout=timeout) as response:
-        content_type = response.headers.get("content-type")
-        content_length = content_length_from_header(response.headers.get("content-length"))
-        if response.status not in {405, 403}:
+
+def probe_request(candidate: Candidate, method: str, timeout_seconds: float) -> ProbeResult:
+    try:
+        request = Request(candidate.url, method=method, headers=REQUEST_HEADERS)
+        with urlopen(request, timeout=timeout_seconds) as response:
+            if method == "GET":
+                response.read(1)
+            status = response.status
+            content_type = response.headers.get("content-type")
+            content_length = content_length_from_header(response.headers.get("content-length"))
             return ProbeResult(
                 candidate=candidate,
-                status=response.status,
-                found=is_image_response(response.status, content_type),
+                status=status,
+                found=is_image_response(status, content_type),
                 content_type=content_type,
                 content_length=content_length,
             )
-
-    get_headers = {**headers, "Range": "bytes=0-0"}
-    async with session.get(candidate.url, allow_redirects=True, headers=get_headers, timeout=timeout) as response:
-        content_type = response.headers.get("content-type")
-        content_length = content_length_from_header(response.headers.get("content-length"))
-        response.release()
+    except HTTPError as exc:
+        content_type = exc.headers.get("content-type")
+        content_length = content_length_from_header(exc.headers.get("content-length"))
         return ProbeResult(
             candidate=candidate,
-            status=response.status,
-            found=is_image_response(response.status, content_type),
+            status=exc.code,
+            found=is_image_response(exc.code, content_type),
             content_type=content_type,
             content_length=content_length,
         )
+    except URLError as exc:
+        return ProbeResult(candidate=candidate, status=None, found=False, error=repr(exc))
 
 
 async def run_scan(args: argparse.Namespace) -> int:
-    try:
-        import aiohttp
-    except ImportError as exc:
-        raise SystemExit("Missing dependency: install with `python -m pip install -r requirements.txt`.") from exc
-
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     found_path = output_dir / FOUND_FILE
@@ -498,11 +511,19 @@ async def run_scan(args: argparse.Namespace) -> int:
     start_time = time.monotonic()
     total_candidates = 0
     checkpoint_counter = 0
+    next_log_at = max(1, args.log_interval)
+    status_counts: Counter[str] = Counter()
     delay_seconds = max(0.0, args.request_delay)
+    print(
+        "Starting scan: "
+        f"profile={state.profile_id} next={state.next_photo_id}/{state.next_photo_number} "
+        f"increment={state.increment} concurrency={args.concurrency} "
+        f"runtime={args.max_runtime_seconds}s found={len(records)}",
+        flush=True,
+    )
 
-    connector = aiohttp.TCPConnector(limit=args.concurrency)
-    async with aiohttp.ClientSession(connector=connector) as session:
-        while True:
+    session = None
+    while True:
             elapsed = time.monotonic() - start_time
             if elapsed >= args.max_runtime_seconds:
                 state.last_status = "runtime_limit_reached"
@@ -590,11 +611,22 @@ async def run_scan(args: argparse.Namespace) -> int:
                     state.consecutive_errors = 0
                     state.last_error = None
                     state.last_status = "found"
+                    print(
+                        "FOUND "
+                        f"photo_number={result.candidate.photo_number} "
+                        f"photo_id={result.candidate.photo_id} "
+                        f"status={result.status} "
+                        f"next={state.next_photo_id}/{state.next_photo_number} "
+                        f"url={result.candidate.url}",
+                        flush=True,
+                    )
                 elif result.status in {429, 500, 502, 503, 504} or result.error:
                     state.consecutive_errors += 1
                     state.last_status = f"transient_error:{result.status or result.error}"
                 else:
                     state.last_status = f"miss:{result.status}"
+
+                status_counts[str(result.status or result.error or "unknown")] += 1
 
             if found_in_batch:
                 state.last_status = "found"
@@ -611,6 +643,21 @@ async def run_scan(args: argparse.Namespace) -> int:
                 save_state(state_path, state)
                 render_index(index_path, state, records, stop_enabled=stop_path.exists())
                 checkpoint_counter = 0
+
+            if state.scanned >= next_log_at:
+                elapsed = max(0.001, time.monotonic() - start_time)
+                common_statuses = ", ".join(
+                    f"{status}:{count}" for status, count in status_counts.most_common(6)
+                )
+                print(
+                    "PROGRESS "
+                    f"scanned={state.scanned} found={len(records)} "
+                    f"next={state.next_photo_id}/{state.next_photo_number} "
+                    f"last={state.last_url} rate={state.scanned / elapsed:.1f}/s "
+                    f"statuses=[{common_statuses}]",
+                    flush=True,
+                )
+                next_log_at = state.scanned + max(1, args.log_interval)
 
             if delay_seconds:
                 await asyncio.sleep(delay_seconds)
@@ -676,6 +723,7 @@ def build_parser() -> argparse.ArgumentParser:
     scan_parser.add_argument("--backoff-after", type=int, default=20)
     scan_parser.add_argument("--max-backoff", type=float, default=30.0)
     scan_parser.add_argument("--request-delay", type=float, default=DEFAULT_REQUEST_DELAY_SECONDS)
+    scan_parser.add_argument("--log-interval", type=int, default=DEFAULT_LOG_INTERVAL)
     scan_parser.add_argument("--reset", action="store_true")
     scan_parser.add_argument("--import-local", action="store_true")
     scan_parser.set_defaults(func=lambda args: asyncio.run(run_scan(args)))
