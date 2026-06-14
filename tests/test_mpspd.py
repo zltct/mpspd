@@ -57,6 +57,9 @@ class MpspdCoreTests(unittest.TestCase):
             self.assertEqual(loaded.next_photo_id, 456)
             self.assertIsNotNone(loaded.updated_at)
 
+    def test_probe_error_label_groups_connection_reset(self):
+        self.assertEqual(mpspd.probe_error_label(ConnectionResetError()), "conn_reset")
+
     def test_render_index_contains_found_links_and_status(self):
         with TemporaryDirectory() as temp_dir:
             index_path = Path(temp_dir) / mpspd.INDEX_FILE

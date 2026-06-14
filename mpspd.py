@@ -12,6 +12,7 @@ import time
 from collections import Counter
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
+from http.client import RemoteDisconnected
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
@@ -348,6 +349,23 @@ def content_length_from_header(value: str | None) -> int | None:
         return None
 
 
+def probe_error_label(exc: BaseException) -> str:
+    if isinstance(exc, TimeoutError):
+        return "timeout"
+    if isinstance(exc, ConnectionResetError):
+        return "conn_reset"
+    if isinstance(exc, RemoteDisconnected):
+        return "remote_disconnected"
+    if isinstance(exc, URLError):
+        reason = exc.reason
+        if isinstance(reason, ConnectionResetError):
+            return "conn_reset"
+        if isinstance(reason, TimeoutError):
+            return "timeout"
+        return "url_error"
+    return exc.__class__.__name__
+
+
 def render_index(
     path: Path,
     state: ScanState,
@@ -423,7 +441,7 @@ async def probe_url(
             return result
         except Exception as exc:  # noqa: BLE001 - record transient network failures.
             if attempt >= retries:
-                return ProbeResult(candidate=candidate, status=None, found=False, error=repr(exc))
+                return ProbeResult(candidate=candidate, status=None, found=False, error=probe_error_label(exc))
             await asyncio.sleep(min(10.0, 0.5 * (2**attempt)))
 
     return ProbeResult(candidate=candidate, status=None, found=False, error="unknown probe failure")
@@ -463,7 +481,7 @@ def probe_request(candidate: Candidate, method: str, timeout_seconds: float) -> 
             content_length=content_length,
         )
     except URLError as exc:
-        return ProbeResult(candidate=candidate, status=None, found=False, error=repr(exc))
+        return ProbeResult(candidate=candidate, status=None, found=False, error=probe_error_label(exc))
 
 
 async def run_scan(args: argparse.Namespace) -> int:
