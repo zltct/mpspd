@@ -27,6 +27,7 @@ DEFAULT_CHECKPOINT_INTERVAL = 100
 DEFAULT_TIMEOUT_SECONDS = 12
 DEFAULT_REQUEST_DELAY_SECONDS = 0.0
 DEFAULT_LOG_INTERVAL = 5000
+DEFAULT_HEALTH_CHECK_INTERVAL = 50
 STATE_FILE = "state.json"
 FOUND_FILE = "found_links.jsonl"
 MANUAL_FILE = "manual_links.txt"
@@ -65,6 +66,8 @@ class ScanState:
     consecutive_errors: int = 0
     last_status: str = "initialized"
     last_probe_status: int | None = None
+    last_health_status: int | None = None
+    last_health_url: str | None = None
     last_error: str | None = None
     last_url: str | None = None
     last_found_url: str | None = None
@@ -184,6 +187,16 @@ def candidate_from_state(state: ScanState) -> Candidate:
     )
 
 
+def candidate_from_url(url: str) -> Candidate:
+    seed = parse_seed_url(url)
+    return Candidate(
+        base_url=seed.base_url,
+        profile_id=seed.profile_id,
+        photo_id=seed.photo_id,
+        photo_number=seed.photo_number,
+    )
+
+
 def advance_state(state: ScanState, count: int = 1) -> None:
     state.next_photo_id += state.increment * count
 
@@ -295,6 +308,11 @@ def save_retry_records(path: Path, records: dict[tuple[int, int, int], RetryReco
     with path.open("w", encoding="utf-8") as file:
         for record in ordered:
             file.write(json.dumps(asdict(record), sort_keys=True) + "\n")
+
+
+def remove_runtime_file(path: Path) -> None:
+    if path.exists():
+        path.unlink()
 
 
 def remember_retry(
@@ -518,6 +536,35 @@ async def probe_url(
     return ProbeResult(candidate=candidate, status=None, found=False, error="unknown probe failure")
 
 
+async def verify_last_found_url(
+    state: ScanState,
+    timeout_seconds: float,
+    retries: int,
+) -> bool:
+    if not state.last_found_url:
+        return True
+
+    candidate = candidate_from_url(state.last_found_url)
+    result = await probe_url(None, candidate, timeout_seconds=timeout_seconds, retries=retries)
+    state.last_health_url = candidate.url
+    state.last_health_status = result.status
+
+    if result.found:
+        return True
+
+    state.last_status = f"health_check_failed:{result.status or result.error}"
+    state.last_probe_status = result.status
+    state.last_error = result.error
+    state.last_url = candidate.url
+    print(
+        "HEALTH_FAIL "
+        f"status={result.status} error={result.error} "
+        f"url={candidate.url}",
+        flush=True,
+    )
+    return False
+
+
 def probe_once(candidate: Candidate, timeout_seconds: float) -> ProbeResult:
     try:
         with requests.get(candidate.url, stream=True, timeout=timeout_seconds) as response:
@@ -569,6 +616,8 @@ async def run_scan(args: argparse.Namespace) -> int:
             next_photo_number=seed.photo_number,
             increment=args.increment,
         )
+        remove_runtime_file(found_path)
+        remove_runtime_file(retry_path)
 
     if args.import_local:
         import_local_images(output_dir, base_url=state.base_url)
@@ -585,6 +634,10 @@ async def run_scan(args: argparse.Namespace) -> int:
     next_log_at = max(1, args.log_interval)
     status_counts: Counter[str] = Counter()
     delay_seconds = max(0.0, args.request_delay)
+    health_check_interval = max(0, args.health_check_interval)
+    health_counter = health_check_interval
+    last_batch_start: Candidate | None = None
+    last_batch_end: Candidate | None = None
     print(
         "Starting scan: "
         f"profile={state.profile_id} next={state.next_photo_id}/{state.next_photo_number} "
@@ -609,6 +662,18 @@ async def run_scan(args: argparse.Namespace) -> int:
                 state.next_photo_id = 0
                 state.last_status = "photo_id_floor_reached"
                 break
+            if (
+                health_check_interval
+                and state.last_found_url
+                and health_counter >= health_check_interval
+            ):
+                if not await verify_last_found_url(
+                    state,
+                    timeout_seconds=args.timeout,
+                    retries=max(args.retries, 2),
+                ):
+                    break
+                health_counter = 0
 
             if args.max_candidates:
                 batch_size = min(args.concurrency, args.max_candidates - total_candidates)
@@ -633,6 +698,10 @@ async def run_scan(args: argparse.Namespace) -> int:
                 candidates.append(candidate)
                 advance_state(state)
                 total_candidates += 1
+
+            if candidates:
+                last_batch_start = candidates[0]
+                last_batch_end = candidates[-1]
 
             tasks = [
                 asyncio.create_task(
@@ -718,7 +787,10 @@ async def run_scan(args: argparse.Namespace) -> int:
 
             if found_in_batch:
                 state.last_status = "found"
+                health_counter = health_check_interval
                 reconcile_known_anchors(state, records + manual_records)
+            else:
+                health_counter += len(results)
 
             if state.consecutive_errors >= args.backoff_after:
                 delay_seconds = min(args.max_backoff, max(1.0, delay_seconds * 2 or 1.0))
@@ -742,6 +814,9 @@ async def run_scan(args: argparse.Namespace) -> int:
                     "PROGRESS "
                     f"scanned={state.scanned} found={len(records)} "
                     f"retry={len(retry_records)} next={state.next_photo_id}/{state.next_photo_number} "
+                    f"issued={last_batch_start.photo_id if last_batch_start else ''}"
+                    f"->{last_batch_end.photo_id if last_batch_end else ''}/"
+                    f"{last_batch_start.photo_number if last_batch_start else ''} "
                     f"last={state.last_url} rate={state.scanned / elapsed:.1f}/s "
                     f"statuses=[{common_statuses}]",
                     flush=True,
@@ -814,6 +889,7 @@ def build_parser() -> argparse.ArgumentParser:
     scan_parser.add_argument("--max-backoff", type=float, default=30.0)
     scan_parser.add_argument("--request-delay", type=float, default=DEFAULT_REQUEST_DELAY_SECONDS)
     scan_parser.add_argument("--log-interval", type=int, default=DEFAULT_LOG_INTERVAL)
+    scan_parser.add_argument("--health-check-interval", type=int, default=DEFAULT_HEALTH_CHECK_INTERVAL)
     scan_parser.add_argument("--reset", action="store_true")
     scan_parser.add_argument("--import-local", action="store_true")
     scan_parser.set_defaults(func=lambda args: asyncio.run(run_scan(args)))

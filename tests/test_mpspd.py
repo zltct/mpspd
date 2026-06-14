@@ -223,6 +223,8 @@ class MpspdCoreTests(unittest.TestCase):
                         "5",
                         "--retries",
                         "0",
+                        "--health-check-interval",
+                        "0",
                     ]
                 )
 
@@ -231,6 +233,135 @@ class MpspdCoreTests(unittest.TestCase):
                 self.assertEqual(state.last_found_url, seed_url)
                 self.assertEqual(state.next_photo_number, 83)
                 self.assertEqual(state.next_photo_id, 15078612)
+        finally:
+            server.shutdown()
+            server.server_close()
+
+    def test_reset_scan_clears_existing_found_records(self):
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                if self.path == "/325966/15946366/90/":
+                    self.send_response(200)
+                    self.send_header("content-type", "image/jpeg")
+                    self.send_header("content-length", "12")
+                    self.end_headers()
+                    self.wfile.write(b"x")
+                else:
+                    self.send_response(404)
+                    self.end_headers()
+
+            def log_message(self, format, *args):
+                return
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            with TemporaryDirectory() as temp_dir:
+                output_dir = Path(temp_dir)
+                old_record = mpspd.FoundRecord(
+                    url=f"http://127.0.0.1:{server.server_port}/325966/23670390/99/",
+                    profile_id=325966,
+                    photo_id=23670390,
+                    photo_number=99,
+                    content_type="image/jpeg",
+                    content_length=1,
+                    status=200,
+                    discovered_at="old",
+                )
+                mpspd.append_found_record(output_dir / mpspd.FOUND_FILE, old_record)
+
+                rc = mpspd.main(
+                    [
+                        "scan",
+                        "--seed-url",
+                        f"http://127.0.0.1:{server.server_port}/325966/15946366/90/",
+                        "--output-dir",
+                        temp_dir,
+                        "--max-candidates",
+                        "1",
+                        "--concurrency",
+                        "1",
+                        "--max-runtime-seconds",
+                        "5",
+                        "--retries",
+                        "0",
+                        "--reset",
+                    ]
+                )
+
+                self.assertEqual(rc, 0)
+                records = mpspd.load_found_records(output_dir / mpspd.FOUND_FILE)
+                self.assertEqual(len(records), 1)
+                self.assertEqual(records[0].photo_number, 90)
+        finally:
+            server.shutdown()
+            server.server_close()
+
+    def test_health_check_stops_before_scanning_when_last_found_fails(self):
+        class Handler(BaseHTTPRequestHandler):
+            requests_seen: list[str] = []
+
+            def do_GET(self):
+                self.__class__.requests_seen.append(self.path)
+                self.send_response(403)
+                self.end_headers()
+
+            def log_message(self, format, *args):
+                return
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            with TemporaryDirectory() as temp_dir:
+                output_dir = Path(temp_dir)
+                state = mpspd.ScanState(
+                    base_url=f"http://127.0.0.1:{server.server_port}",
+                    profile_id=325966,
+                    next_photo_id=15946365,
+                    next_photo_number=89,
+                    increment=-1,
+                    last_found_url=f"http://127.0.0.1:{server.server_port}/325966/15946366/90/",
+                )
+                mpspd.save_state(output_dir / mpspd.STATE_FILE, state)
+                mpspd.append_found_record(
+                    output_dir / mpspd.FOUND_FILE,
+                    mpspd.FoundRecord(
+                        url=state.last_found_url,
+                        profile_id=325966,
+                        photo_id=15946366,
+                        photo_number=90,
+                        content_type="image/jpeg",
+                        content_length=12,
+                        status=200,
+                        discovered_at="old",
+                    ),
+                )
+
+                rc = mpspd.main(
+                    [
+                        "scan",
+                        "--output-dir",
+                        temp_dir,
+                        "--max-candidates",
+                        "1",
+                        "--concurrency",
+                        "1",
+                        "--max-runtime-seconds",
+                        "5",
+                        "--retries",
+                        "0",
+                        "--health-check-interval",
+                        "1",
+                    ]
+                )
+
+                self.assertEqual(rc, 0)
+                repaired = mpspd.load_state(output_dir / mpspd.STATE_FILE)
+                self.assertEqual(repaired.last_status, "health_check_failed:403")
+                self.assertEqual(repaired.scanned, 0)
+                self.assertEqual(Handler.requests_seen, ["/325966/15946366/90/"])
         finally:
             server.shutdown()
             server.server_close()
@@ -285,6 +416,8 @@ class MpspdCoreTests(unittest.TestCase):
                         "--max-runtime-seconds",
                         "5",
                         "--retries",
+                        "0",
+                        "--health-check-interval",
                         "0",
                     ]
                 )

@@ -19,6 +19,22 @@ on:
         description: "Scan duration before publishing and dispatching the next run."
         required: false
         default: "1800"
+      max_candidates:
+        description: "Maximum candidates to scan in this run. 0 means unlimited."
+        required: false
+        default: "0"
+      request_delay:
+        description: "Delay between request batches in seconds."
+        required: false
+        default: "0"
+      log_interval:
+        description: "Progress log interval in scanned candidates."
+        required: false
+        default: "5000"
+      health_check_interval:
+        description: "Verify the last found image after this many scanned candidates. 0 disables."
+        required: false
+        default: "50"
       reset_state:
         description: "Reset state from seed_url before scanning."
         required: false
@@ -94,7 +110,11 @@ jobs:
             --output-dir ../public \
             --concurrency "${{ inputs.concurrency || '50' }}" \
             --max-runtime-seconds "${{ inputs.max_runtime_seconds || '1800' }}" \
+            --max-candidates "${{ inputs.max_candidates || '0' }}" \
             --checkpoint-interval 100 \
+            --request-delay "${{ inputs.request_delay || '0' }}" \
+            --log-interval "${{ inputs.log_interval || '5000' }}" \
+            --health-check-interval "${{ inputs.health_check_interval || '50' }}" \
             --import-local \
             $reset_arg
 
@@ -143,5 +163,9 @@ jobs:
             -f increment="${{ inputs.increment || '-1' }}" \
             -f concurrency="${{ inputs.concurrency || '50' }}" \
             -f max_runtime_seconds="${{ inputs.max_runtime_seconds || '1800' }}" \
+            -f max_candidates="${{ inputs.max_candidates || '0' }}" \
+            -f request_delay="${{ inputs.request_delay || '0' }}" \
+            -f log_interval="${{ inputs.log_interval || '5000' }}" \
+            -f health_check_interval="${{ inputs.health_check_interval || '50' }}" \
             -f reset_state="false" \
             -f continue_loop="true"
