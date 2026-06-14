@@ -135,12 +135,13 @@ class MpspdCoreTests(unittest.TestCase):
 
     def test_scan_command_finds_image_from_fake_server(self):
         class Handler(BaseHTTPRequestHandler):
-            def do_HEAD(self):
+            def do_GET(self):
                 if self.path == "/325966/23670390/99/":
                     self.send_response(200)
                     self.send_header("content-type", "image/jpeg")
                     self.send_header("content-length", "12")
                     self.end_headers()
+                    self.wfile.write(b"x")
                 else:
                     self.send_response(404)
                     self.end_headers()
@@ -187,12 +188,13 @@ class MpspdCoreTests(unittest.TestCase):
 
     def test_scan_resumes_from_last_missed_probe_after_found_image(self):
         class Handler(BaseHTTPRequestHandler):
-            def do_HEAD(self):
+            def do_GET(self):
                 if self.path == "/325966/15078616/84/":
                     self.send_response(200)
                     self.send_header("content-type", "image/jpeg")
                     self.send_header("content-length", "12")
                     self.end_headers()
+                    self.wfile.write(b"x")
                 else:
                     self.send_response(404)
                     self.end_headers()
@@ -235,7 +237,7 @@ class MpspdCoreTests(unittest.TestCase):
 
     def test_scan_uses_manual_anchors_to_repair_bad_negative_state(self):
         class Handler(BaseHTTPRequestHandler):
-            def do_HEAD(self):
+            def do_GET(self):
                 self.send_response(404)
                 self.end_headers()
 

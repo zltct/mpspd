@@ -12,12 +12,11 @@ import time
 from collections import Counter
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
-from http.client import RemoteDisconnected
 from pathlib import Path
 from typing import Any
-from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
-from urllib.request import Request, urlopen
+
+import requests
 
 
 DEFAULT_BASE_URL = "https://images.meupatrocinio.com"
@@ -28,14 +27,6 @@ DEFAULT_CHECKPOINT_INTERVAL = 100
 DEFAULT_TIMEOUT_SECONDS = 12
 DEFAULT_REQUEST_DELAY_SECONDS = 0.0
 DEFAULT_LOG_INTERVAL = 5000
-REQUEST_HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/126.0 Safari/537.36"
-    ),
-    "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
-}
 STATE_FILE = "state.json"
 FOUND_FILE = "found_links.jsonl"
 MANUAL_FILE = "manual_links.txt"
@@ -436,19 +427,12 @@ def content_length_from_header(value: str | None) -> int | None:
 
 
 def probe_error_label(exc: BaseException) -> str:
-    if isinstance(exc, TimeoutError):
+    if isinstance(exc, requests.exceptions.Timeout | TimeoutError):
         return "timeout"
-    if isinstance(exc, ConnectionResetError):
+    if isinstance(exc, requests.exceptions.ConnectionError | ConnectionResetError):
         return "conn_reset"
-    if isinstance(exc, RemoteDisconnected):
-        return "remote_disconnected"
-    if isinstance(exc, URLError):
-        reason = exc.reason
-        if isinstance(reason, ConnectionResetError):
-            return "conn_reset"
-        if isinstance(reason, TimeoutError):
-            return "timeout"
-        return "url_error"
+    if isinstance(exc, requests.exceptions.RequestException):
+        return "request_error"
     return exc.__class__.__name__
 
 
@@ -535,19 +519,9 @@ async def probe_url(
 
 
 def probe_once(candidate: Candidate, timeout_seconds: float) -> ProbeResult:
-    head_result = probe_request(candidate, method="HEAD", timeout_seconds=timeout_seconds)
-    if head_result.status not in {403, 405}:
-        return head_result
-    return probe_request(candidate, method="GET", timeout_seconds=timeout_seconds)
-
-
-def probe_request(candidate: Candidate, method: str, timeout_seconds: float) -> ProbeResult:
     try:
-        request = Request(candidate.url, method=method, headers=REQUEST_HEADERS)
-        with urlopen(request, timeout=timeout_seconds) as response:
-            if method == "GET":
-                response.read(1)
-            status = response.status
+        with requests.get(candidate.url, stream=True, timeout=timeout_seconds) as response:
+            status = response.status_code
             content_type = response.headers.get("content-type")
             content_length = content_length_from_header(response.headers.get("content-length"))
             return ProbeResult(
@@ -557,17 +531,7 @@ def probe_request(candidate: Candidate, method: str, timeout_seconds: float) -> 
                 content_type=content_type,
                 content_length=content_length,
             )
-    except HTTPError as exc:
-        content_type = exc.headers.get("content-type")
-        content_length = content_length_from_header(exc.headers.get("content-length"))
-        return ProbeResult(
-            candidate=candidate,
-            status=exc.code,
-            found=is_image_response(exc.code, content_type),
-            content_type=content_type,
-            content_length=content_length,
-        )
-    except URLError as exc:
+    except requests.exceptions.RequestException as exc:
         return ProbeResult(candidate=candidate, status=None, found=False, error=probe_error_label(exc))
 
 
