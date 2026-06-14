@@ -1,6 +1,6 @@
 {
   "base_url": "https://images.meupatrocinio.com",
-  "consecutive_errors": 0,
+  "consecutive_errors": 1,
   "found": 4,
   "increment": -1,
   "last_error": null,
@@ -14,5 +14,5 @@
   "next_photo_number": 86,
   "profile_id": 325966,
   "scanned": 5014,
-  "updated_at": "2026-06-14T12:54:08+00:00"
+  "updated_at": "2026-06-14T13:14:53+00:00"
 }
