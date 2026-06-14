@@ -224,6 +224,35 @@ def found_key(record: FoundRecord) -> tuple[int, int, int]:
     return (record.profile_id, record.photo_id, record.photo_number)
 
 
+def anchor_key(record: FoundRecord) -> tuple[int, int]:
+    return (record.profile_id, record.photo_number)
+
+
+def reconcile_known_anchors(state: ScanState, records: list[FoundRecord]) -> int:
+    anchors = {anchor_key(record): record for record in records}
+    skipped = 0
+
+    while True:
+        record = anchors.get((state.profile_id, state.next_photo_number))
+        if record is None:
+            return skipped
+
+        advance_after_found(
+            state,
+            Candidate(
+                base_url=state.base_url,
+                profile_id=record.profile_id,
+                photo_id=record.photo_id,
+                photo_number=record.photo_number,
+            ),
+        )
+        state.last_found_url = record.url
+        state.last_probe_status = record.status or None
+        state.last_error = None
+        state.last_status = "known_anchor"
+        skipped += 1
+
+
 def import_local_images(output_dir: Path, base_url: str | None = None) -> list[FoundRecord]:
     records: list[FoundRecord] = []
     image_pattern = re.compile(r"^(\d+)_(\d+)_(\d+)\.(jpe?g|png|gif|webp)$", re.IGNORECASE)
@@ -462,6 +491,8 @@ async def run_scan(args: argparse.Namespace) -> int:
         import_local_images(output_dir, base_url=state.base_url)
 
     records = load_found_records(found_path)
+    manual_records = load_manual_records(output_dir / MANUAL_FILE)
+    reconcile_known_anchors(state, records + manual_records)
     state.found = len(records)
     seen = {found_key(record) for record in records}
     start_time = time.monotonic()
@@ -481,6 +512,10 @@ async def run_scan(args: argparse.Namespace) -> int:
                 break
             if stop_path.exists():
                 state.last_status = "stop_flag_present"
+                break
+            if state.increment < 0 and state.next_photo_id <= 0:
+                state.next_photo_id = 0
+                state.last_status = "photo_id_floor_reached"
                 break
 
             if args.max_candidates:
@@ -563,6 +598,7 @@ async def run_scan(args: argparse.Namespace) -> int:
 
             if found_in_batch:
                 state.last_status = "found"
+                reconcile_known_anchors(state, records + manual_records)
 
             if state.consecutive_errors >= args.backoff_after:
                 delay_seconds = min(args.max_backoff, max(1.0, delay_seconds * 2 or 1.0))

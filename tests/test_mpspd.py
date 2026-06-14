@@ -182,6 +182,117 @@ class MpspdCoreTests(unittest.TestCase):
             server.shutdown()
             server.server_close()
 
+    def test_scan_resumes_from_last_missed_probe_after_found_image(self):
+        class Handler(BaseHTTPRequestHandler):
+            def do_HEAD(self):
+                if self.path == "/325966/15078616/84/":
+                    self.send_response(200)
+                    self.send_header("content-type", "image/jpeg")
+                    self.send_header("content-length", "12")
+                    self.end_headers()
+                else:
+                    self.send_response(404)
+                    self.end_headers()
+
+            def log_message(self, format, *args):
+                return
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            with TemporaryDirectory() as temp_dir:
+                seed_url = f"http://127.0.0.1:{server.server_port}/325966/15078616/84/"
+                rc = mpspd.main(
+                    [
+                        "scan",
+                        "--seed-url",
+                        seed_url,
+                        "--output-dir",
+                        temp_dir,
+                        "--max-candidates",
+                        "4",
+                        "--concurrency",
+                        "1",
+                        "--max-runtime-seconds",
+                        "5",
+                        "--retries",
+                        "0",
+                    ]
+                )
+
+                self.assertEqual(rc, 0)
+                state = mpspd.load_state(Path(temp_dir) / mpspd.STATE_FILE)
+                self.assertEqual(state.last_found_url, seed_url)
+                self.assertEqual(state.next_photo_number, 83)
+                self.assertEqual(state.next_photo_id, 15078612)
+        finally:
+            server.shutdown()
+            server.server_close()
+
+    def test_scan_uses_manual_anchors_to_repair_bad_negative_state(self):
+        class Handler(BaseHTTPRequestHandler):
+            def do_HEAD(self):
+                self.send_response(404)
+                self.end_headers()
+
+            def log_message(self, format, *args):
+                return
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            with TemporaryDirectory() as temp_dir:
+                output_dir = Path(temp_dir)
+                state = mpspd.ScanState(
+                    base_url=f"http://127.0.0.1:{server.server_port}",
+                    profile_id=325966,
+                    next_photo_id=-16718957,
+                    next_photo_number=86,
+                    increment=-1,
+                    scanned=32665303,
+                    last_status="runtime_limit_reached",
+                )
+                mpspd.save_state(output_dir / mpspd.STATE_FILE, state)
+                (output_dir / mpspd.MANUAL_FILE).write_text(
+                    "\n".join(
+                        [
+                            f"http://127.0.0.1:{server.server_port}/325966/15281379/86/",
+                            f"http://127.0.0.1:{server.server_port}/325966/15078623/85/",
+                            f"http://127.0.0.1:{server.server_port}/325966/15078616/84/",
+                            f"http://127.0.0.1:{server.server_port}/325966/14582353/83/",
+                        ]
+                    )
+                    + "\n",
+                    encoding="utf-8",
+                )
+
+                rc = mpspd.main(
+                    [
+                        "scan",
+                        "--output-dir",
+                        temp_dir,
+                        "--max-candidates",
+                        "1",
+                        "--concurrency",
+                        "1",
+                        "--max-runtime-seconds",
+                        "5",
+                        "--retries",
+                        "0",
+                    ]
+                )
+
+                self.assertEqual(rc, 0)
+                repaired = mpspd.load_state(output_dir / mpspd.STATE_FILE)
+                self.assertEqual(repaired.last_found_url, f"http://127.0.0.1:{server.server_port}/325966/14582353/83/")
+                self.assertEqual(repaired.next_photo_number, 82)
+                self.assertEqual(repaired.next_photo_id, 14582351)
+        finally:
+            server.shutdown()
+            server.server_close()
+
 
 if __name__ == "__main__":
     unittest.main()
